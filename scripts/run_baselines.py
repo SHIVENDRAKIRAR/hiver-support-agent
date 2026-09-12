@@ -1,11 +1,4 @@
-"""
-Run both baselines against the golden set and compare accuracy to the LLM
-classifier (Part 7). This produces the "how much does the LLM actually
-earn over cheap alternatives" comparison the assignment asks for.
 
-Usage:
-    python scripts/run_baselines.py --golden data/golden_set_spotcheck.jsonl
-"""
 
 import argparse
 import json

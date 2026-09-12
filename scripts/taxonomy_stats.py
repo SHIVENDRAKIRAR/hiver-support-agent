@@ -1,11 +1,3 @@
-"""
-Standalone stats counter for taxonomy volume-checking. Writes results to a
-file (not just stdout) so nothing gets lost to terminal buffering/truncation.
-
-Usage:
-    python scripts/taxonomy_stats.py --input data/threads_AmazonHelp_clean.jsonl
-"""
-
 import argparse
 import json
 import re

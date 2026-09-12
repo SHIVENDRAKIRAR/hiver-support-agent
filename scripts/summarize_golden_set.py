@@ -1,10 +1,3 @@
-"""
-Summarize the completed golden set: overall human-vs-LLM agreement rate,
-per-class breakdown, and where the LLM's suggestion was overridden.
-
-Usage:
-    python scripts/summarize_golden_set.py --input data/golden_set.jsonl
-"""
 
 import argparse
 import json

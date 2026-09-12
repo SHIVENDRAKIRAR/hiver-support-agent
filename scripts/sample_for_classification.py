@@ -1,13 +1,3 @@
-"""
-Draw a random sample of English, in-scope, support-signal customer opening
-messages for LLM-based intent classification (used to check class balance
-and to build/validate the classifier).
-
-Usage:
-    python scripts/sample_for_classification.py \
-        --input data/threads_AmazonHelp_clean.jsonl \
-        --n 1000 --seed 42 --out data/sample_for_classification.jsonl
-"""
 
 import argparse
 import json

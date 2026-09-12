@@ -1,19 +1,3 @@
-"""
-Fast, honest spot-check labeling: a SMALL stratified sample (default 50)
-pulled from the already-built golden_set_candidates.jsonl, meant to
-actually be read and judged carefully rather than rubber-stamped.
-
-This exists because a 200-example labeling pass is easy to rush through
-without really reading each one -- a properly-attended 50-example check
-is worth more than a rushed 200-example one for reporting a real human-vs-LLM
-agreement rate.
-
-Usage:
-    python scripts/spot_check_golden_set.py \
-        --input data/golden_set_candidates.jsonl \
-        --out data/golden_set_spotcheck.jsonl \
-        --n 50 --seed 1
-"""
 
 import argparse
 import json

@@ -1,14 +1,3 @@
-"""
-Sample customer opening messages for taxonomy volume-checking, using the
-locked filter_is_support_signal() heuristic (not a length cutoff) and a
-lightweight language check to separate English (in-scope) from
-non-English (language_out_of_scope).
-
-Usage:
-    python scripts/sample_for_taxonomy.py \
-        --input data/threads_AmazonHelp_clean.jsonl --n 400 --seed 42
-"""
-
 import argparse
 import json
 import random
