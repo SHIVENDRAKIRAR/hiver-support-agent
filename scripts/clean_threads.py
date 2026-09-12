@@ -1,16 +1,16 @@
 """
-Clean and normalize thread text for downstream classification / reply / RAG work.
+Clean and normalize thread text for classification, reply generation, and RAG.
 
-- Strips @mentions used for routing (keeps them out of model input, but
-  keeps a record of who was mentioned)
-- Removes the trailing "^XY" agent-signoff codes common on brand support tweets
-- Normalizes whitespace, unescapes HTML entities
-- Redacts obvious PII patterns (order numbers, emails, phone-like digit runs)
-  -- crude regex-based redaction, good enough for a support-ticket dataset;
-     flagged in the report as a known limitation, not a compliance-grade PII filter
+The cleaning pipeline:
+- Removes @mentions while preserving them in a separate field.
+- Removes trailing two-letter agent sign-off codes.
+- Unescapes HTML entities.
+- Normalizes whitespace.
+- Redacts common PII patterns such as emails, phone numbers, and order references.
 
 Usage:
-    python scripts/clean_threads.py --input data/threads_AmazonHelp.jsonl \
+    python scripts/clean_threads.py \
+        --input data/threads_AmazonHelp.jsonl \
         --output data/threads_AmazonHelp_clean.jsonl
 """
 
@@ -19,49 +19,73 @@ import html
 import json
 import re
 
+
 MENTION_RE = re.compile(r"@\w+")
-SIGNOFF_RE = re.compile(r"\s*\^[A-Za-z]{2}\s*$")
+SIGNOFF_RE = re.compile(r"\s\^\*[A-Za-z]{2}\s\*$")
 WHITESPACE_RE = re.compile(r"\s+")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 PHONE_RE = re.compile(r"\b\d{10,}\b")
-ORDER_RE = re.compile(r"\b(?:order|case|ref)[\s#:]*[\w-]{6,}\b", re.IGNORECASE)
+ORDER_RE = re.compile(
+    r"\b(?:order|case|ref)[\s#:]*[\w-]{6,}\b",
+    re.IGNORECASE,
+)
 
 
-def clean_text(text: str):
-    original = text
+def clean_text(text: str) -> tuple[str, list[str]]:
+    """Clean a message and return the cleaned text and extracted mentions."""
     text = html.unescape(text)
+
     mentions = MENTION_RE.findall(text)
     text = MENTION_RE.sub("", text)
+
     text = SIGNOFF_RE.sub("", text)
     text = EMAIL_RE.sub("[EMAIL]", text)
     text = PHONE_RE.sub("[PHONE]", text)
     text = ORDER_RE.sub("[ORDER_REF]", text)
     text = WHITESPACE_RE.sub(" ", text).strip()
+
     return text, mentions
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--output", required=True)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Clean and normalize AmazonHelp thread text."
+    )
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
 
-    n_in, n_out = 0, 0
-    with open(args.input, "r", encoding="utf-8") as fin, \
-         open(args.output, "w", encoding="utf-8") as fout:
-        for line in fin:
-            n_in += 1
-            obj = json.loads(line)
-            for turn in obj["turns"]:
-                clean, mentions = clean_text(turn["text"])
-                turn["text_clean"] = clean
+    input_count = 0
+    output_count = 0
+
+    with (
+        open(args.input, "r", encoding="utf-8") as input_file,
+        open(args.output, "w", encoding="utf-8") as output_file,
+    ):
+        for line in input_file:
+            input_count += 1
+            thread = json.loads(line)
+
+            for turn in thread["turns"]:
+                cleaned_text, mentions = clean_text(turn["text"])
+                turn["text_clean"] = cleaned_text
                 turn["mentions"] = mentions
-            # drop threads that ended up with no substantive customer turn
-            if any(t["text_clean"] and not t["is_brand"] for t in obj["turns"]):
-                fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-                n_out += 1
 
-    print(f"Read {n_in} threads, wrote {n_out} cleaned threads to {args.output}")
+            has_customer_text = any(
+                turn["text_clean"] and not turn["is_brand"]
+                for turn in thread["turns"]
+            )
+
+            if has_customer_text:
+                output_file.write(
+                    json.dumps(thread, ensure_ascii=False) + "\n"
+                )
+                output_count += 1
+
+    print(
+        f"Read {input_count} threads, wrote "
+        f"{output_count} cleaned threads to {args.output}"
+    )
 
 
 if __name__ == "__main__":
