@@ -1,114 +1,131 @@
 """
-Filter the full 'Customer Support on Twitter' dataset (twcs.csv) down to
-conversation threads involving a single target brand (default: AmazonHelp).
+Filter the Customer Support on Twitter dataset to threads involving a
+target brand.
 
 Usage:
-    python scripts/filter_brand.py --input data/twcs.csv --brand AmazonHelp
+    python scripts/filter_brand.py \
+        --input data/twcs.csv \
+        --brand AmazonHelp
 
-Output:
-    data/threads_<brand>.jsonl   -- one reconstructed conversation per line
-    data/threads_<brand>_stats.json -- basic stats about the filtered subset
-
-A "thread" here is a chain of tweets linked via `in_response_to_tweet_id`
-and `response_tweet_id`, trimmed to just the (customer, brand) turns
-belonging to a single root customer complaint. We keep the FULL thread
-(both directions) as long as the brand account appears somewhere in it.
+Outputs:
+    data/threads_<brand>.jsonl
+    data/threads_<brand>_stats.json
 """
 
 import argparse
 import csv
 import json
+import os
 import sys
-from collections import defaultdict
+from collections import deque
+
 
 csv.field_size_limit(sys.maxsize)
 
 
-def load_rows(path: str):
-    """Stream-load the CSV into a dict keyed by tweet_id."""
-    rows = {}
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows[row["tweet_id"]] = row
-    return rows
+def load_rows(path: str) -> dict:
+    """Load tweets into a dictionary keyed by tweet ID."""
+    with open(path, "r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        return {
+            row["tweet_id"]: row
+            for row in reader
+        }
 
 
-def build_threads(rows: dict, brand: str):
-    """
-    Reconstruct full conversation threads.
-    Strategy:
-      1. Find every tweet authored by `brand`.
-      2. Walk backwards via in_response_to_tweet_id to find the thread root
-         (the original customer complaint that started the conversation).
-      3. Walk forwards via response_tweet_id to capture the full back-and-forth.
-      4. Deduplicate threads by root tweet id.
-    """
+def find_root(tweet_id: str, rows: dict) -> str:
+    """Walk backwards to find the earliest available tweet in a thread."""
+    seen = set()
+    current_id = tweet_id
+
+    while current_id not in seen and current_id in rows:
+        seen.add(current_id)
+
+        parent_id = rows[current_id].get("in_response_to_tweet_id", "")
+
+        if not parent_id or parent_id not in rows:
+            break
+
+        current_id = parent_id
+
+    return current_id
+
+
+def collect_thread(root_id: str, rows: dict) -> list[dict]:
+    """Collect all reachable tweets from a thread root."""
+    thread = []
+    queue = deque([root_id])
+    seen = set()
+
+    while queue:
+        tweet_id = queue.popleft()
+
+        if tweet_id in seen or tweet_id not in rows:
+            continue
+
+        seen.add(tweet_id)
+        row = rows[tweet_id]
+        thread.append(row)
+
+        response_ids = row.get("response_tweet_id", "") or ""
+
+        for response_id in response_ids.split(","):
+            response_id = response_id.strip()
+
+            if response_id and response_id not in seen:
+                queue.append(response_id)
+
+    return thread
+
+
+def build_threads(rows: dict, brand: str) -> list[list[dict]]:
+    """Reconstruct conversation threads involving the target brand."""
     brand_tweet_ids = [
-        tid for tid, r in rows.items() if r["author_id"] == brand
+        tweet_id
+        for tweet_id, row in rows.items()
+        if row["author_id"] == brand
     ]
 
-    def find_root(tweet_id):
-        seen = set()
-        cur = tweet_id
-        while True:
-            if cur in seen or cur not in rows:
-                return cur
-            seen.add(cur)
-            parent = rows[cur].get("in_response_to_tweet_id", "")
-            if not parent or parent == "" or parent not in rows:
-                return cur
-            cur = parent
-
-    def collect_forward(root_id):
-        """BFS forward from root using response_tweet_id (can be comma-separated)."""
-        thread = []
-        queue = [root_id]
-        seen = set()
-        while queue:
-            tid = queue.pop(0)
-            if tid in seen or tid not in rows:
-                continue
-            seen.add(tid)
-            row = rows[tid]
-            thread.append(row)
-            children = row.get("response_tweet_id", "") or ""
-            for child in children.split(","):
-                child = child.strip()
-                if child and child not in seen:
-                    queue.append(child)
-        return thread
-
-    roots_seen = set()
     threads = []
-    for btid in brand_tweet_ids:
-        root_id = find_root(btid)
+    roots_seen = set()
+
+    for tweet_id in brand_tweet_ids:
+        root_id = find_root(tweet_id, rows)
+
         if root_id in roots_seen:
             continue
+
         roots_seen.add(root_id)
-        thread_rows = collect_forward(root_id)
-        # only keep if brand actually appears in this thread
-        if any(r["author_id"] == brand for r in thread_rows):
-            thread_rows_sorted = sorted(
-                thread_rows, key=lambda r: r["tweet_id"]
+
+        thread = collect_thread(root_id, rows)
+
+        if any(row["author_id"] == brand for row in thread):
+            threads.append(
+                sorted(thread, key=lambda row: row["tweet_id"])
             )
-            threads.append(thread_rows_sorted)
 
     return threads
 
 
-def to_clean_dict(thread_rows):
-    turns = []
-    for r in thread_rows:
-        turns.append({
-            "tweet_id": r["tweet_id"],
-            "author_id": r["author_id"],
-            "is_brand": r["inbound"] == "False",
-            "created_at": r["created_at"],
-            "text": r["text"],
-            "in_response_to_tweet_id": r.get("in_response_to_tweet_id") or None,
-            "response_tweet_id": r.get("response_tweet_id") or None,
-        })
+def convert_to_thread_dict(thread_rows: list[dict]) -> dict:
+    """Convert raw tweet records into the project's thread format."""
+    turns = [
+        {
+            "tweet_id": row["tweet_id"],
+            "author_id": row["author_id"],
+            "is_brand": row["inbound"] == "False",
+            "created_at": row["created_at"],
+            "text": row["text"],
+            "in_response_to_tweet_id": (
+                row.get("in_response_to_tweet_id") or None
+            ),
+            "response_tweet_id": (
+                row.get("response_tweet_id") or None
+            ),
+        }
+        for row in thread_rows
+    ]
+
     return {
         "thread_id": thread_rows[0]["tweet_id"],
         "num_turns": len(turns),
@@ -116,43 +133,97 @@ def to_clean_dict(thread_rows):
     }
 
 
+def write_threads(threads: list[list[dict]], output_path: str) -> None:
+    """Write reconstructed threads to a JSONL file."""
+    with open(output_path, "w", encoding="utf-8") as file:
+        for thread in threads:
+            record = convert_to_thread_dict(thread)
+            file.write(
+                json.dumps(record, ensure_ascii=False) + "\n"
+            )
+
+
+def build_stats(threads: list[list[dict]], brand: str) -> dict:
+    """Build basic statistics for the filtered thread set."""
+    turn_counts = [len(thread) for thread in threads]
+
+    return {
+        "brand": brand,
+        "num_threads": len(threads),
+        "avg_turns_per_thread": (
+            sum(turn_counts) / len(turn_counts)
+            if turn_counts
+            else 0
+        ),
+        "min_turns": min(turn_counts) if turn_counts else 0,
+        "max_turns": max(turn_counts) if turn_counts else 0,
+    }
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Path to twcs.csv")
-    ap.add_argument("--brand", default="AmazonHelp", help="Brand author_id to filter to")
-    ap.add_argument("--outdir", default="data", help="Output directory")
-    ap.add_argument("--max-threads", type=int, default=0, help="Optional cap for quick testing (0 = no cap)")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Filter and reconstruct threads for a target brand."
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Path to twcs.csv.",
+    )
+    parser.add_argument(
+        "--brand",
+        default="AmazonHelp",
+        help="Brand author ID to filter.",
+    )
+    parser.add_argument(
+        "--outdir",
+        default="data",
+        help="Output directory.",
+    )
+    parser.add_argument(
+        "--max-threads",
+        type=int,
+        default=0,
+        help="Maximum number of threads for testing. 0 means no limit.",
+    )
+    args = parser.parse_args()
 
     print(f"Loading {args.input} ...", file=sys.stderr)
     rows = load_rows(args.input)
     print(f"Loaded {len(rows)} tweets total", file=sys.stderr)
 
-    print(f"Building threads for brand={args.brand} ...", file=sys.stderr)
+    print(
+        f"Building threads for brand={args.brand} ...",
+        file=sys.stderr,
+    )
     threads = build_threads(rows, args.brand)
-    print(f"Found {len(threads)} threads involving {args.brand}", file=sys.stderr)
 
-    if args.max_threads:
-        threads = threads[: args.max_threads]
+    print(
+        f"Found {len(threads)} threads involving {args.brand}",
+        file=sys.stderr,
+    )
 
-    out_path = f"{args.outdir}/threads_{args.brand}.jsonl"
-    with open(out_path, "w", encoding="utf-8") as f:
-        for t in threads:
-            f.write(json.dumps(to_clean_dict(t), ensure_ascii=False) + "\n")
+    if args.max_threads > 0:
+        threads = threads[:args.max_threads]
 
-    turn_counts = [len(t) for t in threads]
-    stats = {
-        "brand": args.brand,
-        "num_threads": len(threads),
-        "avg_turns_per_thread": sum(turn_counts) / len(turn_counts) if turn_counts else 0,
-        "min_turns": min(turn_counts) if turn_counts else 0,
-        "max_turns": max(turn_counts) if turn_counts else 0,
-    }
-    stats_path = f"{args.outdir}/threads_{args.brand}_stats.json"
-    with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(stats, f, indent=2)
+    os.makedirs(args.outdir, exist_ok=True)
 
-    print(f"Wrote {out_path}", file=sys.stderr)
+    threads_path = os.path.join(
+        args.outdir,
+        f"threads_{args.brand}.jsonl",
+    )
+    stats_path = os.path.join(
+        args.outdir,
+        f"threads_{args.brand}_stats.json",
+    )
+
+    write_threads(threads, threads_path)
+
+    stats = build_stats(threads, args.brand)
+
+    with open(stats_path, "w", encoding="utf-8") as file:
+        json.dump(stats, file, indent=2)
+
+    print(f"Wrote {threads_path}", file=sys.stderr)
     print(f"Wrote {stats_path} -> {stats}", file=sys.stderr)
 
 
