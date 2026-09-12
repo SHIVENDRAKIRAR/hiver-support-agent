@@ -1,7 +1,5 @@
 """
-Evaluation harness summary (Part 6): aggregates intent classification
-accuracy (from the golden set spot-check) and reply quality scores (from
-the LLM judge) into one report for the final write-up.
+Aggregate intent classification and reply quality evaluation results.
 
 Usage:
     python scripts/eval_harness_summary.py \
@@ -14,14 +12,24 @@ import json
 from collections import defaultdict
 
 
-def summarize_classification(golden_path):
-    rows = []
-    with open(golden_path, "r", encoding="utf-8") as f:
-        for line in f:
-            rows.append(json.loads(line))
+LOW_SCORE_THRESHOLD = 2
+EXAMPLE_LIMIT = 5
+
+
+def load_jsonl(path: str) -> list[dict]:
+    """Load records from a JSONL file."""
+    with open(path, "r", encoding="utf-8") as file:
+        return [json.loads(line) for line in file]
+
+
+def summarize_classification(golden_path: str) -> dict:
+    """Summarize agreement between human labels and LLM classifications."""
+    rows = load_jsonl(golden_path)
 
     total = len(rows)
-    agreed = sum(1 for r in rows if r["human_agreed_with_llm"])
+    agreed = sum(
+        1 for row in rows if row["human_agreed_with_llm"]
+    )
 
     return {
         "total": total,
@@ -31,68 +39,160 @@ def summarize_classification(golden_path):
     }
 
 
-def summarize_judged_replies(judged_path):
-    rows = []
-    with open(judged_path, "r", encoding="utf-8") as f:
-        for line in f:
-            rows.append(json.loads(line))
+def summarize_judged_replies(judged_path: str) -> dict:
+    """Summarize LLM-judged reply quality."""
+    rows = load_jsonl(judged_path)
 
-    scored = [r for r in rows if r.get("relevance") is not None]
-    errors = len(rows) - len(scored)
+    scored = [
+        row for row in rows
+        if row.get("relevance") is not None
+    ]
 
     if not scored:
-        return {"total": len(rows), "scored": 0, "errors": errors}
-
-    avg_relevance = sum(r["relevance"] for r in scored) / len(scored)
-    avg_correctness = sum(r["correctness"] for r in scored) / len(scored)
-    avg_tone = sum(r["tone"] for r in scored) / len(scored)
-
-    low_correctness = [r for r in scored if r["correctness"] <= 2]
-    low_relevance = [r for r in scored if r["relevance"] <= 2]
-
-    by_intent = defaultdict(lambda: {"n": 0, "relevance": 0, "correctness": 0, "tone": 0})
-    for r in scored:
-        b = by_intent[r.get("intent", "unknown")]
-        b["n"] += 1
-        b["relevance"] += r["relevance"]
-        b["correctness"] += r["correctness"]
-        b["tone"] += r["tone"]
-
-    per_intent_avg = {
-        intent: {
-            "n": b["n"],
-            "avg_relevance": round(b["relevance"] / b["n"], 2),
-            "avg_correctness": round(b["correctness"] / b["n"], 2),
-            "avg_tone": round(b["tone"] / b["n"], 2),
+        return {
+            "total": len(rows),
+            "scored": 0,
+            "errors": len(rows),
         }
-        for intent, b in by_intent.items()
+
+    avg_relevance = sum(row["relevance"] for row in scored) / len(scored)
+    avg_correctness = sum(
+        row["correctness"] for row in scored
+    ) / len(scored)
+    avg_tone = sum(row["tone"] for row in scored) / len(scored)
+
+    low_correctness = [
+        row for row in scored
+        if row["correctness"] <= LOW_SCORE_THRESHOLD
+    ]
+    low_relevance = [
+        row for row in scored
+        if row["relevance"] <= LOW_SCORE_THRESHOLD
+    ]
+
+    by_intent = defaultdict(
+        lambda: {
+            "n": 0,
+            "relevance": 0,
+            "correctness": 0,
+            "tone": 0,
+        }
+    )
+
+    for row in scored:
+        intent = row.get("intent", "unknown")
+        stats = by_intent[intent]
+
+        stats["n"] += 1
+        stats["relevance"] += row["relevance"]
+        stats["correctness"] += row["correctness"]
+        stats["tone"] += row["tone"]
+
+    per_intent = {
+        intent: {
+            "n": stats["n"],
+            "avg_relevance": round(
+                stats["relevance"] / stats["n"], 2
+            ),
+            "avg_correctness": round(
+                stats["correctness"] / stats["n"], 2
+            ),
+            "avg_tone": round(
+                stats["tone"] / stats["n"], 2
+            ),
+        }
+        for intent, stats in by_intent.items()
     }
 
     return {
         "total": len(rows),
         "scored": len(scored),
-        "errors": errors,
+        "errors": len(rows) - len(scored),
         "avg_relevance": round(avg_relevance, 2),
         "avg_correctness": round(avg_correctness, 2),
         "avg_tone": round(avg_tone, 2),
         "low_correctness_examples": [
-            {"text": r["text"][:100], "reply": r["reply"][:100], "correctness": r["correctness"], "rationale": r.get("rationale")}
-            for r in low_correctness[:5]
+            {
+                "text": row["text"][:100],
+                "reply": row["reply"][:100],
+                "correctness": row["correctness"],
+                "rationale": row.get("rationale"),
+            }
+            for row in low_correctness[:EXAMPLE_LIMIT]
         ],
         "low_relevance_examples": [
-            {"text": r["text"][:100], "reply": r["reply"][:100], "relevance": r["relevance"], "rationale": r.get("rationale")}
-            for r in low_relevance[:5]
+            {
+                "text": row["text"][:100],
+                "reply": row["reply"][:100],
+                "relevance": row["relevance"],
+                "rationale": row.get("rationale"),
+            }
+            for row in low_relevance[:EXAMPLE_LIMIT]
         ],
-        "per_intent": per_intent_avg,
+        "per_intent": per_intent,
     }
 
 
+def print_report(classification: dict, reply_quality: dict) -> None:
+    """Print the evaluation summary to the console."""
+    print("=== EVALUATION HARNESS SUMMARY ===")
+
+    print("\n--- Intent Classification (human-verified golden set) ---")
+    print(f"  Total: {classification['total']}")
+    print(
+        f"  Agreement rate: "
+        f"{100 * classification['agreement_rate']:.1f}% "
+        f"({classification['agreed']}/{classification['total']})"
+    )
+
+    print("\n--- Reply Quality (LLM-as-judge) ---")
+    print(
+        f"  Total generated: {reply_quality['total']}, "
+        f"scored: {reply_quality.get('scored', 0)}, "
+        f"errors: {reply_quality.get('errors', 0)}"
+    )
+
+    if not reply_quality.get("scored"):
+        return
+
+    print(f"  Avg relevance:   {reply_quality['avg_relevance']}/5")
+    print(f"  Avg correctness: {reply_quality['avg_correctness']}/5")
+    print(f"  Avg tone:        {reply_quality['avg_tone']}/5")
+
+    print("\n  Low-correctness examples (score <=2):")
+    for example in reply_quality["low_correctness_examples"]:
+        print(
+            f"    [{example['correctness']}/5] "
+            f"{example['text']}"
+        )
+        print(f"      -> reply: {example['reply']}")
+        print(f"      -> why: {example['rationale']}")
+
+    print("\n  Per-intent breakdown:")
+    for intent, stats in sorted(
+        reply_quality["per_intent"].items(),
+        key=lambda item: -item[1]["n"],
+    ):
+        print(
+            f"    {intent:30s} "
+            f"n={stats['n']:3d}  "
+            f"rel={stats['avg_relevance']}  "
+            f"corr={stats['avg_correctness']}  "
+            f"tone={stats['avg_tone']}"
+        )
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--golden", required=True)
-    ap.add_argument("--judged", required=True)
-    ap.add_argument("--out", default="data/eval_harness_report.json")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Summarize intent and reply quality evaluation results."
+    )
+    parser.add_argument("--golden", required=True)
+    parser.add_argument("--judged", required=True)
+    parser.add_argument(
+        "--out",
+        default="data/eval_harness_report.json",
+    )
+    args = parser.parse_args()
 
     classification_summary = summarize_classification(args.golden)
     reply_summary = summarize_judged_replies(args.judged)
@@ -102,32 +202,12 @@ def main():
         "reply_quality": reply_summary,
     }
 
-    print("=== EVALUATION HARNESS SUMMARY ===\n")
-    print("--- Intent Classification (human-verified golden set) ---")
-    print(f"  Total: {classification_summary['total']}")
-    print(f"  Agreement rate: {100*classification_summary['agreement_rate']:.1f}% "
-          f"({classification_summary['agreed']}/{classification_summary['total']})")
+    print_report(classification_summary, reply_summary)
 
-    print("\n--- Reply Quality (LLM-as-judge) ---")
-    print(f"  Total generated: {reply_summary['total']}, scored: {reply_summary.get('scored', 0)}, errors: {reply_summary.get('errors', 0)}")
-    if reply_summary.get("scored"):
-        print(f"  Avg relevance:   {reply_summary['avg_relevance']}/5")
-        print(f"  Avg correctness: {reply_summary['avg_correctness']}/5")
-        print(f"  Avg tone:        {reply_summary['avg_tone']}/5")
+    with open(args.out, "w", encoding="utf-8") as file:
+        json.dump(report, file, indent=2)
 
-        print(f"\n  Low-correctness examples (score <=2, possible hallucination):")
-        for ex in reply_summary["low_correctness_examples"]:
-            print(f"    [{ex['correctness']}/5] {ex['text']}")
-            print(f"      -> reply: {ex['reply']}")
-            print(f"      -> why: {ex['rationale']}")
-
-        print(f"\n  Per-intent breakdown:")
-        for intent, stats in sorted(reply_summary["per_intent"].items(), key=lambda x: -x[1]["n"]):
-            print(f"    {intent:30s} n={stats['n']:3d}  rel={stats['avg_relevance']}  corr={stats['avg_correctness']}  tone={stats['avg_tone']}")
-
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    print(f"\n(full report also written to {args.out})")
+    print(f"\nFull report also written to {args.out}")
 
 
 if __name__ == "__main__":
