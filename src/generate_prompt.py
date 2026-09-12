@@ -1,17 +1,19 @@
 """
-Prompt construction for grounded reply generation (Part 4).
+Prompt construction for grounded reply generation.
 
-Kept separate from the generation code, same as classify_prompt.py --
-prompt design is a first-class decision here, not an implementation detail.
+The prompt is kept separate from the generation code so it can be
+reviewed and versioned independently. Prompt design is treated as a
+first-class project decision rather than an implementation detail.
 
-Core design choice: the prompt shows the LLM real retrieved precedent
-(how AmazonHelp actually replied to similar past complaints) and instructs
-it to draft in a similar STYLE and to stay within what precedent supports,
-rather than inventing specific policy commitments (refund amounts, exact
-timelines, compensation promises) that aren't grounded in the retrieved
-examples. This is the key hallucination-control lever for this task --
-without it, a support-reply generator will happily promise things Amazon's
-real policy may not support.
+Core design choice:
+    The prompt provides real retrieved precedent showing how AmazonHelp
+    replied to similar complaints. The model is instructed to match the
+    demonstrated style and stay within what the precedent supports,
+    rather than inventing policy commitments such as refund amounts,
+    delivery timelines, or compensation promises.
+
+This acts as the primary hallucination-control mechanism for reply
+generation.
 """
 
 REPLY_SYSTEM_PROMPT = """You are drafting a reply for AmazonHelp's Twitter customer support account.
@@ -45,21 +47,31 @@ the retrieved examples and the reply is a generic fallback, so we can flag it
 for review. No other text."""
 
 
-def build_generation_prompt(customer_message: str, intent: str, retrieved: list) -> str:
-    """
-    retrieved: list of dicts from ThreadRetriever.retrieve(), each with
-    'customer_text', 'brand_replies', 'similarity'.
-    """
-    examples_text = ""
-    for i, ex in enumerate(retrieved, 1):
-        examples_text += f"\nExample {i} (similarity={ex['similarity']:.2f}):\n"
-        examples_text += f"  Customer: {ex['customer_text']}\n"
-        for reply in ex["brand_replies"][:1]:  # just the first brand reply per example
-            examples_text += f"  AmazonHelp replied: {reply}\n"
+def build_generation_prompt(
+    customer_message: str,
+    intent: str,
+    retrieved: list[dict],
+) -> str:
+    """Build the prompt containing the customer message and retrieved precedent."""
+    examples = []
+
+    for index, example in enumerate(retrieved, start=1):
+        example_text = (
+            f"Example {index} "
+            f"(similarity={example['similarity']:.2f}):\n"
+            f"  Customer: {example['customer_text']}\n"
+        )
+
+        for reply in example["brand_replies"][:1]:
+            example_text += f"  AmazonHelp replied: {reply}\n"
+
+        examples.append(example_text)
+
+    examples_text = "\n".join(examples)
 
     return (
-        f"Customer message:\n\"\"\"\n{customer_message}\n\"\"\"\n\n"
+        f'Customer message:\n"""\n{customer_message}\n"""\n\n'
         f"Classified intent: {intent}\n\n"
-        f"Similar past threads:{examples_text}\n\n"
-        f"Draft a reply for this new customer message."
+        f"Similar past threads:\n{examples_text}\n\n"
+        "Draft a reply for this new customer message."
     )
