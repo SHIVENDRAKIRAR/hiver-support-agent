@@ -1,10 +1,9 @@
 """
-Analyze class balance from the LLM-classified sample, flag any errors,
-and print a report to decide whether subscription_or_membership_issue
-(or other classes) need merging/splitting.
+Analyze class balance in an LLM-classified sample.
 
 Usage:
-    python scripts/analyze_class_balance.py --input data/classified_sample.jsonl
+    python scripts/analyze_class_balance.py \
+        --input data/classified_sample.jsonl
 """
 
 import argparse
@@ -12,47 +11,96 @@ import json
 from collections import Counter
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--out", default="data/class_balance_report.txt")
-    args = ap.parse_args()
+ERROR_LABELS = {
+    "INVALID_LABEL",
+    "PARSE_ERROR",
+    "API_ERROR",
+    "UNKNOWN_ERROR",
+}
 
-    rows = []
-    with open(args.input, "r", encoding="utf-8") as f:
-        for line in f:
-            rows.append(json.loads(line))
+LOW_CONFIDENCE_THRESHOLD = 0.6
+LOW_CONFIDENCE_SAMPLE_SIZE = 10
 
-    counts = Counter(r["intent"] for r in rows)
+
+def load_rows(input_path):
+    """Load classified records from a JSONL file."""
+    with open(input_path, "r", encoding="utf-8") as file:
+        return [json.loads(line) for line in file]
+
+
+def build_report(rows):
+    """Build a class-balance report from classified records."""
+    counts = Counter(row["intent"] for row in rows)
     total = len(rows)
+
+    if total == 0:
+        return "--- CLASS BALANCE REPORT ---\ntotal classified: 0"
+
     errors = sum(
-        v for k, v in counts.items()
-        if k in ("INVALID_LABEL", "PARSE_ERROR", "API_ERROR", "UNKNOWN_ERROR")
+        count for label, count in counts.items() if label in ERROR_LABELS
     )
 
-    lines = ["--- CLASS BALANCE REPORT ---", f"total classified: {total}", ""]
-    for label, count in counts.most_common():
-        pct = 100 * count / total
-        lines.append(f"{label:35s} {count:5d}  ({pct:5.1f}%)")
-
-    lines.append("")
-    lines.append(f"errors/invalid: {errors} ({100*errors/total:.1f}%)")
-
-    # low-confidence examples worth a manual look
-    low_conf = [
-        r for r in rows
-        if r.get("confidence") is not None and r["confidence"] < 0.6
+    lines = [
+        "--- CLASS BALANCE REPORT ---",
+        f"total classified: {total}",
+        "",
     ]
-    lines.append(f"\nlow-confidence (<0.6) classifications: {len(low_conf)}")
-    if low_conf:
-        lines.append("sample of low-confidence cases:")
-        for r in low_conf[:10]:
-            lines.append(f"  [{r['intent']} conf={r['confidence']}] {r['text'][:100]}")
 
-    text = "\n".join(lines)
-    print(text)
-    with open(args.out, "w", encoding="utf-8") as f:
-        f.write(text + "\n")
+    for label, count in counts.most_common():
+        percentage = 100 * count / total
+        lines.append(f"{label:35s} {count:5d}  ({percentage:5.1f}%)")
+
+    error_percentage = 100 * errors / total
+    lines.extend(
+        [
+            "",
+            f"errors/invalid: {errors} ({error_percentage:.1f}%)",
+        ]
+    )
+
+    low_confidence_rows = [
+        row
+        for row in rows
+        if row.get("confidence") is not None
+        and row["confidence"] < LOW_CONFIDENCE_THRESHOLD
+    ]
+
+    lines.append(
+        f"\nlow-confidence (<{LOW_CONFIDENCE_THRESHOLD}) "
+        f"classifications: {len(low_confidence_rows)}"
+    )
+
+    if low_confidence_rows:
+        lines.append("sample of low-confidence cases:")
+
+        for row in low_confidence_rows[:LOW_CONFIDENCE_SAMPLE_SIZE]:
+            lines.append(
+                f"  [{row['intent']} conf={row['confidence']}] "
+                f"{row['text'][:100]}"
+            )
+
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze class balance in an LLM-classified sample."
+    )
+    parser.add_argument("--input", required=True)
+    parser.add_argument(
+        "--out",
+        default="data/class_balance_report.txt",
+    )
+    args = parser.parse_args()
+
+    rows = load_rows(args.input)
+    report = build_report(rows)
+
+    print(report)
+
+    with open(args.out, "w", encoding="utf-8") as file:
+        file.write(report + "\n")
+
     print(f"\n(also written to {args.out})")
 
 
