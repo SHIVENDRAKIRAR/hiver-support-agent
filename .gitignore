@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+data/*.csv
+data/*.jsonl
+data/*.json
+data/*.pkl
+data/*.txt
+!data/.gitkeep
+*.db
+.DS_Store
+.vscode/
+.idea/
+*.log
