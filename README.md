@@ -1,30 +1,32 @@
 # AmazonHelp AI Support Agent
 
-Take-home assignment (Hiver SDE Intern) — AI customer support agent built on
-real AmazonHelp Twitter support conversations from the
-[Customer Support on Twitter](https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter)
-dataset.
+An AI customer support agent built on real AmazonHelp Twitter conversations
+from the [Customer Support on Twitter](https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter)
+dataset. Given an incoming customer message, the agent:
 
-The agent: (1) classifies incoming customer messages into intents, (2) drafts
-a reply grounded in how AmazonHelp has historically resolved similar issues,
-(3) decides whether to auto-handle or escalate to a human, with a stated reason.
+1. **Classifies** it into one of 8 support intents (or flags it as non-English
+   or non-support content)
+2. **Drafts a reply**, grounded in retrieval over how AmazonHelp has
+   historically resolved similar issues
+3. **Decides whether to escalate** to a human, with a stated reason — as a
+   judgment separate from intent
 
-**Full report:** [`reports/report.md`](reports/report.md)
-**Decision log:** [`reports/decision_log.md`](reports/decision_log.md)
+Full report: [`reports/report.md`](reports/report.md)
+Decision log: [`reports/decision_log.md`](reports/decision_log.md)
 
-## Headline results
+## Results
 
 | Metric | Value |
 |---|---|
-| Intent classification accuracy (LLM, vs. 44-example human-verified golden set) | 75.0% |
+| Intent classification accuracy (vs. human-verified golden set, n=44) | 75.0% |
 | ...vs. keyword-rule baseline | 20.5% |
 | ...vs. trivial baseline | 20.5% |
-| Reply relevance (LLM-judge, 1-5) | 4.84 |
-| Reply correctness / no fabrication (LLM-judge, 1-5) | 5.00 |
-| Reply tone (LLM-judge, 1-5) | 4.95 |
+| Reply relevance (LLM-judge, 1–5) | 4.84 |
+| Reply correctness / no fabrication (LLM-judge, 1–5) | 5.00 |
+| Reply tone (LLM-judge, 1–5) | 4.95 |
 
-See the report for why the reply-quality numbers need a caveat before being
-taken at face value.
+See the report for methodology, caveats on the reply-quality scores, and a
+full failure analysis.
 
 ## Setup
 
@@ -34,17 +36,20 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-**Also required: [Ollama](https://ollama.com/download)** (all classification,
-generation, and judging runs locally, at zero cost):
+Requires [Ollama](https://ollama.com/download) — all classification, generation,
+and judging run locally at zero cost:
+
 ```bash
 ollama pull llama3.1
 ```
 
+## Reproducing the results
+
 ### 1. Get the data
 
 Download `twcs.csv` from
-[Kaggle](https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter),
-place at `data/twcs.csv`.
+[Kaggle](https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter)
+and place it at `data/twcs.csv`.
 
 ### 2. Build the pipeline
 
@@ -60,7 +65,7 @@ python scripts/sample_for_classification.py --input data/threads_AmazonHelp_clea
 python scripts/classify_with_ollama.py --input data/sample_for_classification.jsonl --out data/classified_sample.jsonl
 ```
 
-Full 1000-row run takes ~1 hour locally; supports resume if interrupted.
+The full 1000-row run takes roughly an hour locally and supports resuming if interrupted.
 
 ### 4. Build the golden set and spot-check
 
@@ -90,17 +95,5 @@ python scripts/run_baselines.py --golden data/golden_set_spotcheck.jsonl
 scripts/    data loading, cleaning, classification, generation, evaluation
 src/        core logic: taxonomy, prompts, escalation rules, retrieval, baselines
 reports/    final report, decision log
-data/       raw + processed data (gitignored)
+data/       raw and processed data (gitignored)
 ```
-
-## Status
-
-- [x] Part 1 — Data acquisition, thread reconstruction, cleaning, DB schema
-- [x] Part 2 — Intent taxonomy (8 intents, locked from measured class volumes) + classifier
-- [x] Part 3 — Golden evaluation set (200 LLM-classified, 44 human-verified spot-check)
-- [x] Part 4 — Grounded reply generation (RAG, anti-hallucination, leakage-free)
-- [x] Part 5 — Escalation decision logic (rules + LLM judgment, decoupled from intent)
-- [x] Part 6 — Evaluation harness (classification accuracy + LLM-as-judge reply scoring)
-- [x] Part 7 — Baselines (trivial + keyword-rule) + top-5 failure analysis
-- [x] Part 8 — Report + decision log + this README
-"# hiver-support-agent" 
